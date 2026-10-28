@@ -1,4 +1,4 @@
-import { IsInt, IsString, IsUUID, Matches, Max, MaxLength, Min, MinLength } from 'class-validator';
+import { IsBoolean, IsInt, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min, MinLength } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
 export class CreateInvoiceDto {
@@ -19,4 +19,8 @@ export class CreateOrderDto {
   @ApiProperty({ type: String, example: '11111111-1111-4111-8111-111111111111' })
   @IsUUID()
   invoiceId!: string;
+  @ApiProperty({ type: Boolean, required: false, description: 'Force creation of a new payment session' })
+  @IsOptional()
+  @IsBoolean()
+  forceNew?: boolean;
 }

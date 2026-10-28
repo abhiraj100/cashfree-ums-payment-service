@@ -19,7 +19,7 @@ const checks = [
   ['CASHFREE_CLIENT_ID', value => value.length >= 12 && value.toUpperCase().includes('TEST'), 'a Cashfree Payment Gateway test client ID'],
   ['CASHFREE_CLIENT_SECRET', value => value.length >= 24 && value.toLowerCase().includes('test'), 'a newly rotated Cashfree test client secret'],
   ['CASHFREE_API_VERSION', value => /^\d{4}-\d{2}-\d{2}$/.test(value), 'a YYYY-MM-DD API version'],
-  ['PUBLIC_BASE_URL', value => /^https:\/\//.test(value) && !value.includes('.example') && !value.includes('replace-with'), 'your current public HTTPS tunnel origin'],
+  ['PUBLIC_BASE_URL', value => /^https?:\/\//.test(value) && !value.includes('.example') && !value.includes('replace-with'), 'your current public HTTPS tunnel origin or local URL'],
 ];
 
 let failed = false;

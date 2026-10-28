@@ -63,49 +63,72 @@ export class PaymentsService {
     return row;
   }
 
-  async initiate(invoiceId: string, key: string) {
+  async initiate(invoiceId: string, key: string, forceNew = false) {
     if (!key || !/^[A-Za-z0-9_-]{8,128}$/.test(key)) throw new BadRequestException('Idempotency-Key must contain 8–128 letters, numbers, underscores or hyphens');
     const hash = createHash('sha256').update(invoiceId).digest('hex');
-    let reservation: { order: any; invoice: any };
+    const sessionMaxAgeMs = 15 * 60 * 1000; // Cashfree sessions expire in ~15-30 minutes
+    let reservation: { order: any; invoice: any; isNew: boolean };
     try {
       reservation = await this.db.transaction(async client => {
         // Serializes different keys for the same invoice; never hold this lock over HTTP.
         const invoice = (await client.query('SELECT * FROM fee_invoices WHERE id=$1 FOR UPDATE', [invoiceId])).rows[0];
         if (!invoice) throw new NotFoundException('Invoice not found');
-        const existing = (await client.query('SELECT * FROM idempotency_requests WHERE key=$1', [key])).rows[0];
-        if (existing) {
-          if (existing.request_hash !== hash) throw new ConflictException('Idempotency key was used with a different invoice');
-          const order = (await client.query('SELECT * FROM payment_orders WHERE id=$1', [existing.order_id])).rows[0];
-          if (invoice.status === 'PAID' && order.status !== 'PAID') throw new ConflictException('Invoice is already paid through another order');
-          return { order, invoice };
-        }
         if (invoice.status === 'PAID') throw new ConflictException('Invoice is already paid');
+
         let order = (await client.query('SELECT * FROM payment_orders WHERE invoice_id=$1 AND active=TRUE', [invoiceId])).rows[0];
+
+        const isStale = order && (
+          forceNew ||
+          ['EXPIRED', 'TERMINATED', 'FAILED'].includes(order.status) ||
+          (order.payment_session_id && order.created_at && (Date.now() - new Date(order.created_at).getTime() > sessionMaxAgeMs))
+        );
+
+        if (order && isStale) {
+          await client.query(`UPDATE payment_orders SET active=FALSE, status=CASE WHEN status='PAID' THEN status ELSE 'SUPERSEDED' END WHERE id=$1`, [order.id]);
+          order = null;
+        }
+
+        let isNew = false;
         if (!order) {
           const id = randomUUID();
           order = (await client.query(`INSERT INTO payment_orders(id,invoice_id,merchant_order_id,gateway_key)
             VALUES($1,$2,$3,$4) RETURNING *`, [id, invoiceId, `ums_${id}`, randomUUID()])).rows[0];
+          isNew = true;
         }
-        await client.query('INSERT INTO idempotency_requests(key,request_hash,order_id) VALUES($1,$2,$3)', [key, hash, order.id]);
-        return { order, invoice };
+
+        const existing = (await client.query('SELECT * FROM idempotency_requests WHERE key=$1', [key])).rows[0];
+        if (existing) {
+          if (existing.request_hash !== hash) throw new ConflictException('Idempotency key was used with a different invoice');
+          if (isNew) {
+            await client.query('UPDATE idempotency_requests SET order_id=$2 WHERE key=$1', [key, order.id]);
+          }
+        } else {
+          await client.query('INSERT INTO idempotency_requests(key,request_hash,order_id) VALUES($1,$2,$3)', [key, hash, order.id]);
+        }
+
+        return { order, invoice, isNew };
       });
     } catch (e: any) {
       if (e.code === '23505') throw new ConflictException('Concurrent request; retry with the same idempotency key');
       throw e;
     }
-    const { order, invoice } = reservation;
-    if (order.payment_session_id || !order.active) return order;
+    const { order, invoice, isNew } = reservation;
+    if (order.payment_session_id && order.active && !isNew) return order;
     const publicBase = process.env.PUBLIC_BASE_URL ?? '';
-    if (!/^https:\/\//.test(publicBase) || publicBase.includes('.example')) {
-      throw new ServiceUnavailableException('Set PUBLIC_BASE_URL to the public HTTPS address of this API');
+    if (!/^https?:\/\//.test(publicBase) || publicBase.includes('.example')) {
+      throw new ServiceUnavailableException('Set PUBLIC_BASE_URL to the public HTTPS or local address of this API');
     }
     let remote = await this.gateway.getOrder(order.merchant_order_id);
-    if (!remote) {
+    if (!remote || ['EXPIRED', 'TERMINATED'].includes(remote.order_status)) {
       remote = await this.gateway.createOrder({
         order_id: order.merchant_order_id,
         order_amount: Number(invoice.amount_minor) / 100,
         order_currency: invoice.currency,
-        customer_details: { customer_id: invoice.student_reference, customer_phone: invoice.customer_phone },
+        customer_details: {
+          customer_id: invoice.student_reference.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 50) || 'STUDENT_001',
+          customer_phone: invoice.customer_phone,
+          customer_name: invoice.student_reference,
+        },
         order_meta: { return_url: `${publicBase}/payment-return?order_id={order_id}` },
       }, order.gateway_key);
     }

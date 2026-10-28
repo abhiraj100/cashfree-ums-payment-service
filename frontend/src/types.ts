@@ -52,8 +52,15 @@ export type Receipt = {
 
 declare global {
   interface Window {
-    Cashfree?: (options: { mode: 'sandbox' }) => {
-      checkout: (options: { paymentSessionId: string; redirectTarget: '_modal' | '_self' }) => Promise<unknown>;
+    Cashfree?: (options: { mode: 'sandbox' | 'production' }) => {
+      checkout: (options: {
+        paymentSessionId: string;
+        redirectTarget?: '_modal' | '_self' | '_blank';
+      }) => Promise<{
+        error?: { message?: string; code?: string };
+        redirect?: boolean;
+        paymentDetails?: unknown;
+      } | void>;
     };
   }
 }

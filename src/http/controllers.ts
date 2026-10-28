@@ -30,7 +30,7 @@ export class PaymentsController {
   @Post('payment-orders')
   @ApiBody({ type: CreateOrderDto })
   @ApiHeader({ name: 'Idempotency-Key', required: true, description: '8–128 letters, digits, underscores or hyphens' })
-  initiate(@Body(orderValidation) body: CreateOrderDto, @Headers('idempotency-key') key: string) { return this.payments.initiate(body.invoiceId, key); }
+  initiate(@Body(orderValidation) body: CreateOrderDto, @Headers('idempotency-key') key: string) { return this.payments.initiate(body.invoiceId, key, Boolean(body.forceNew)); }
   @Get('payment-orders/:id')
   order(@Param('id', ParseUUIDPipe) id: string) { return this.payments.order(id); }
   @Get('payment-orders/:id/attempts')

@@ -108,19 +108,67 @@ function InvoiceDrawer({ invoice, token, onClose, onUpdated, toast }: { invoice:
     catch (e) { toast(messageOf(e), 'error'); } finally { setBusy(''); }
   }
 
-  async function pay() {
+  async function pay(target: '_modal' | '_blank' | '_self' = '_modal', forceNew = false) {
     setBusy('pay');
     try {
       const idempotencyKey = crypto.randomUUID();
-      const created = await api.initiate(token, invoice.id, idempotencyKey);
+      const created = await api.initiate(token, invoice.id, idempotencyKey, forceNew);
       sessionStorage.setItem(LAST_ORDER_KEY, created.id);
       setOrder(created);
       if (!created.payment_session_id) throw new Error('Cashfree did not return a payment session. Use Verify status and try again.');
       if (!window.Cashfree) throw new Error('Cashfree Checkout could not load. Check your internet connection and content-security settings.');
-      await window.Cashfree({ mode: 'sandbox' }).checkout({ paymentSessionId: created.payment_session_id, redirectTarget: '_modal' });
-      toast('Checkout closed. Confirming the server-side payment status…');
+
+      if (target === '_self') {
+        toast('Redirecting to Cashfree sandbox checkout…');
+        const res = await window.Cashfree({ mode: 'sandbox' }).checkout({
+          paymentSessionId: created.payment_session_id,
+          redirectTarget: '_self',
+        }) as { error?: { message?: string; code?: string } } | undefined;
+        if (res?.error && !forceNew && (res.error.code === 'payment_session_id_invalid' || res.error.message?.includes('payment_session_id'))) {
+          toast('Stale session detected. Regenerating a fresh Cashfree session…', 'error');
+          return pay(target, true);
+        }
+        return;
+      }
+
+      if (target === '_blank') {
+        toast('Opening Cashfree checkout in a new tab…');
+        const res = await window.Cashfree({ mode: 'sandbox' }).checkout({
+          paymentSessionId: created.payment_session_id,
+          redirectTarget: '_blank',
+        }) as { error?: { message?: string; code?: string } } | undefined;
+        if (res?.error && !forceNew && (res.error.code === 'payment_session_id_invalid' || res.error.message?.includes('payment_session_id'))) {
+          toast('Stale session detected. Regenerating a fresh Cashfree session…', 'error');
+          return pay(target, true);
+        }
+        setBusy('');
+        toast('Complete test payment in the new tab, then click Verify status below.');
+        return;
+      }
+
+      const result = await window.Cashfree({ mode: 'sandbox' }).checkout({
+        paymentSessionId: created.payment_session_id,
+        redirectTarget: '_modal',
+      }) as { error?: { message?: string; code?: string }; redirect?: boolean; paymentDetails?: unknown } | undefined;
+
+      if (result?.error) {
+        if (!forceNew && (result.error.code === 'payment_session_id_invalid' || result.error.message?.includes('payment_session_id'))) {
+          toast('Stale session detected. Regenerating a fresh Cashfree session…', 'error');
+          return pay(target, true);
+        }
+        toast(result.error.message || 'Checkout closed or cancelled.', 'error');
+      } else {
+        toast('Checkout closed. Confirming the server-side payment status…');
+      }
       await verify(created.id);
-    } catch (e) { toast(messageOf(e), 'error'); } finally { setBusy(''); }
+    } catch (e: any) {
+      if (!forceNew && e?.message?.includes('payment_session_id')) {
+        return pay(target, true);
+      }
+      toast(messageOf(e), 'error');
+    } finally {
+      setBusy('');
+    }
   }
 
   return <div className="drawer-backdrop" role="presentation" onMouseDown={e => e.target === e.currentTarget && onClose()}>
@@ -128,7 +176,45 @@ function InvoiceDrawer({ invoice, token, onClose, onUpdated, toast }: { invoice:
       <div className="drawer-head"><div><p className="eyebrow dark">Invoice detail</p><h2>{invoice.erp_reference}</h2></div><button className="icon-button" onClick={onClose} aria-label="Close"><Icon name="close" /></button></div>
       <div className="invoice-hero"><div><span>Amount due</span><strong>{money(invoice.amount_minor)}</strong></div><span className={`status ${invoice.status.toLowerCase()}`}>{invoice.status}</span></div>
       <dl className="detail-list"><div><dt>Student</dt><dd>{invoice.student_reference}</dd></div><div><dt>Phone</dt><dd>••••••{invoice.customer_phone.slice(-4)}</dd></div><div><dt>Created</dt><dd>{date(invoice.created_at)}</dd></div><div><dt>Currency</dt><dd>{invoice.currency}</dd></div></dl>
-      {invoice.status === 'UNPAID' && <button className="primary wide pay-button" onClick={pay} disabled={!!busy}><Icon name="card" />{busy === 'pay' ? 'Opening Cashfree…' : 'Pay securely in sandbox'}</button>}
+      {invoice.status === 'UNPAID' && (
+        <div className="pay-actions">
+          <button className="primary wide pay-button" onClick={() => pay('_modal')} disabled={!!busy}>
+            <Icon name="card" />
+            {busy === 'pay' ? 'Opening Cashfree…' : 'Pay in sandbox (Popup modal)'}
+          </button>
+          <div className="pay-alt-row">
+            <button type="button" className="secondary pay-alt-btn" onClick={() => pay('_blank')} disabled={!!busy} title="Opens Cashfree checkout in a new tab if popup is blocked">
+              Pay in new tab
+            </button>
+            <button type="button" className="secondary pay-alt-btn" onClick={() => pay('_self')} disabled={!!busy} title="Redirect this window to Cashfree checkout">
+              Pay via redirect
+            </button>
+          </div>
+          <button type="button" className="text-button new-session-btn" onClick={() => pay('_modal', true)} disabled={!!busy}>
+            <Icon name="refresh" size={14} /> Generate fresh checkout session
+          </button>
+          {busy === 'pay' && (
+            <div className="checkout-active-notice">
+              <p>Cashfree sandbox checkout is open. If the popup appears blank or is blocked by browser shields:</p>
+              <div className="checkout-fallback-actions">
+                <button type="button" className="secondary small-btn" onClick={() => pay('_blank')}>Open in new tab</button>
+                <button type="button" className="secondary small-btn" onClick={() => { if (order) verify(order.id); else setBusy(''); }}>Verify status</button>
+                <button type="button" className="secondary small-btn" onClick={() => setBusy('')}>Dismiss</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+      <section className="demo-cards-card">
+        <div className="demo-card-title"><Icon name="shield" size={16} /><strong>Sandbox test credentials</strong></div>
+        <p className="demo-copy">Use any of these in Cashfree test checkout (CVV: <code>123</code> · Expiry: <code>12/28</code> · OTP: <code>111000</code>):</p>
+        <div className="demo-list">
+          <div><span>Visa Debit:</span><code>4706 1312 1121 2123</code></div>
+          <div><span>Visa Credit:</span><code>4444 3333 2222 1111</code></div>
+          <div><span>Mastercard:</span><code>5409 1626 6938 1034</code></div>
+          <div><span>UPI VPA:</span><code>testsuccess@gocash</code></div>
+        </div>
+      </section>
       {order && <section className="drawer-section"><div className="section-title"><h3>Payment order</h3><button className="text-button" disabled={!!busy} onClick={() => verify(order.id)}><Icon name="refresh" size={16} />{busy === 'verify' ? 'Checking…' : 'Verify status'}</button></div><div className="order-strip"><span>{order.merchant_order_id}</span><b>{order.status}</b></div></section>}
       <section className="drawer-section"><h3>Attempt history</h3>{attempts.length ? <div className="timeline">{attempts.map(item => <div className="timeline-row" key={item.cf_payment_id}><i className={item.status === 'SUCCESS' ? 'success-dot' : ''} /><div><strong>{item.status}</strong><span>{item.cf_payment_id}</span></div><time>{date(item.updated_at)}</time></div>)}</div> : <p className="empty-small">No payment attempt has reached the server yet.</p>}</section>
       {receipt && <section className="receipt-card"><div className="receipt-icon"><Icon name="receipt" /></div><div><span>Receipt issued</span><strong>{receipt.id}</strong><small>Cashfree payment {receipt.cf_payment_id}</small></div><b>{money(receipt.amount_minor)}</b></section>}
@@ -169,7 +255,7 @@ export function App() {
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
-    const lastOrder = sessionStorage.getItem(LAST_ORDER_KEY);
+    const lastOrder = sessionStorage.getItem(LAST_ORDER_KEY) || params.get('merchant_order_id')?.replace(/^ums_/, '');
     if (token && params.get('payment_return') === '1' && lastOrder) {
       history.replaceState({}, '', '/');
       api.verify(token, lastOrder).then(() => refresh()).then(() => toast('Payment return received and verified.', 'success')).catch(error => toast(messageOf(error), 'error'));

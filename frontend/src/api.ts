@@ -31,8 +31,8 @@ export const api = {
   invoices: (token: string) => request<Invoice[]>('/invoices', token),
   createInvoice: (token: string, body: { erpReference: string; studentReference: string; customerPhone: string; amountMinor: number }) =>
     request<Invoice>('/invoices', token, { method: 'POST', body: JSON.stringify(body) }),
-  initiate: (token: string, invoiceId: string, key: string) => request<PaymentOrder>('/payment-orders', token, {
-    method: 'POST', headers: { 'Idempotency-Key': key }, body: JSON.stringify({ invoiceId }),
+  initiate: (token: string, invoiceId: string, key: string, forceNew = false) => request<PaymentOrder>('/payment-orders', token, {
+    method: 'POST', headers: { 'Idempotency-Key': key }, body: JSON.stringify({ invoiceId, ...(forceNew ? { forceNew: true } : {}) }),
   }),
   order: (token: string, id: string) => request<PaymentOrder>(`/payment-orders/${id}`, token),
   verify: (token: string, id: string) => request<PaymentOrder>(`/payment-orders/${id}/verify`, token, { method: 'POST' }),

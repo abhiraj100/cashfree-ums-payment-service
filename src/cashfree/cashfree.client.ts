@@ -24,7 +24,11 @@ export class CashfreeClient implements Gateway {
         body: body ? JSON.stringify(body) : undefined,
       });
       if (method === 'GET' && response.status === 404) return null;
-      if (!response.ok) throw new Error(`Gateway HTTP ${response.status}`);
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        console.error(`Cashfree API error [${method} ${path}] ${response.status}:`, errorText);
+        throw new Error(`Gateway HTTP ${response.status}`);
+      }
       return await response.json();
     } catch { throw new ServiceUnavailableException('Cashfree unavailable or rejected the request; retry with the same idempotency key'); }
   }
