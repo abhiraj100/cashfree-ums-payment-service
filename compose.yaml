@@ -1,0 +1,37 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ums_payments
+      POSTGRES_USER: ums
+      POSTGRES_PASSWORD: ums_local_password
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ums -d ums_payments"]
+      interval: 5s
+      retries: 10
+  api:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://ums:ums_local_password@db:5432/ums_payments
+    ports:
+      - "3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["sh", "-c", "npm run db:migrate && npm start"]
+  worker:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://ums:ums_local_password@db:5432/ums_payments
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["sh", "-c", "npm run db:migrate && npm run worker"]
+volumes:
+  pgdata:

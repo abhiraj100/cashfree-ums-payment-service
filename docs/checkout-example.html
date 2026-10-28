@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Cashfree sandbox checkout</title></head>
+<body>
+  <h1>Cashfree sandbox checkout</h1>
+  <p>Paste the payment_session_id returned by your authenticated backend. Use only Cashfree test payment details.</p>
+  <label>Payment session <input id="session" type="text" size="60" autocomplete="off"></label>
+  <button id="pay" type="button">Open sandbox checkout</button>
+  <p id="message" role="status"></p>
+  <script src="https://sdk.cashfree.com/js/v3/cashfree.js"></script>
+  <script>
+    document.getElementById('pay').addEventListener('click', async () => {
+      const session = document.getElementById('session').value.trim();
+      if (!session) return;
+      try {
+        await Cashfree({ mode: 'sandbox' }).checkout({ paymentSessionId: session, redirectTarget: '_modal' });
+        document.getElementById('message').textContent = 'Checkout closed. Verify the payment through your backend; closing this window does not confirm success.';
+      } catch {
+        document.getElementById('message').textContent = 'Checkout could not open. Check the session, test domain configuration, and browser console.';
+      }
+    });
+  </script>
+</body>
+</html>
